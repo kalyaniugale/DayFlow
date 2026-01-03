@@ -4,7 +4,6 @@ generator client {
 
 datasource db {
   provider = "postgresql"
-  url      = env("DATABASE_URL")
 }
 
 enum Role {
@@ -29,12 +28,15 @@ enum DocumentType {
 }
 
 model User {
-  id        String   @id @default(uuid())
-  name      String
-  email     String   @unique
-  password  String
-  role      Role     @default(EMPLOYEE)
-  isActive  Boolean  @default(true)
+  id             String   @id @default(uuid())
+  name           String
+  email          String   @unique
+  loginId        String   @unique // Auto-generated: OI + initials + year + serial
+  password       String
+  role           Role     @default(EMPLOYEE)
+  isActive       Boolean  @default(true)
+  passwordChanged Boolean @default(false) // Track if user changed auto-generated password
+  emailVerified  Boolean  @default(false) // Email verification status
 
   // Optional link to employee (1-1). Employee owns the FK (userId).
   employee  Employee?
@@ -60,6 +62,7 @@ model Employee {
   department    String?
   designation   String?
   dateOfJoin    DateTime?
+  yearOfJoining Int?    // Year of joining for login ID generation
   managerId     String?
 
   // Back-relations
@@ -176,4 +179,14 @@ model CompanyLog {
   createdByUser   User? @relation("CompanyLogCreatedByUser", fields: [createdByUserId], references: [id], onDelete: SetNull)
 
   createdAt DateTime @default(now())
+}
+
+// Track serial numbers for login ID generation per year
+model LoginIdSerial {
+  id        String   @id @default(uuid())
+  year      Int      @unique // Year (e.g., 2022, 2023)
+  serial    Int      @default(1) // Next serial number for this year
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 }

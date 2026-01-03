@@ -4,16 +4,12 @@ dotenv.config();
 
 import cookieParser from "cookie-parser";
 import cors from "cors";
-import passport from "passport";
-import "./src/config/passport.js";
-import { googleSuccess } from "./src/controllers/authController.js";
-import authRouter from "./src/routes/authRoute.js";
-
-// ✅ Prisma client
-import { PrismaClient } from "@prisma/client";
 import bcrypt from "bcryptjs";
 
-const prisma = new PrismaClient();
+import authRouter from "./src/routes/authRoute.js";
+
+// ✅ IMPORT THE SINGLE PRISMA INSTANCE
+import prisma from "./src/config/prisma.js";
 
 const app = express();
 const port = process.env.PORT || 5000;
@@ -29,29 +25,18 @@ app.use(
   })
 );
 
-app.use(passport.initialize());
-
 app.get("/", (req, res) => {
   res.send("hello from server");
 });
-
-// Google callback
-app.get(
-  "/auth/google/callback",
-  passport.authenticate("google", { session: false }),
-  googleSuccess
-);
 
 // auth routes
 app.use("/api/auth", authRouter);
 
 /**
  * ✅ Create a test user
- * POST /test-user
  */
 app.post("/test-user", async (req, res) => {
   try {
-    // optionally allow custom values from body
     const {
       name = "Test User",
       email = "testuser@gmail.com",
@@ -81,7 +66,6 @@ app.post("/test-user", async (req, res) => {
   } catch (err) {
     console.error(err);
 
-    // common Prisma unique error for email
     if (err.code === "P2002") {
       return res.status(409).json({ error: "Email already exists" });
     }
@@ -92,7 +76,6 @@ app.post("/test-user", async (req, res) => {
 
 /**
  * ✅ Fetch all users
- * GET /users
  */
 app.get("/users", async (req, res) => {
   try {
@@ -106,6 +89,7 @@ app.get("/users", async (req, res) => {
       },
       orderBy: { createdAt: "desc" },
     });
+
     res.json(users);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -115,7 +99,6 @@ app.get("/users", async (req, res) => {
 app.listen(port, async () => {
   console.log("server started on port", port);
 
-  // ✅ optional, but nice to confirm DB connection at startup
   try {
     await prisma.$connect();
     console.log("prisma connected");
@@ -124,8 +107,19 @@ app.listen(port, async () => {
   }
 });
 
-// ✅ clean shutdown (prevents hanging connections)
+// ✅ clean shutdown
 process.on("SIGINT", async () => {
   await prisma.$disconnect();
   process.exit(0);
 });
+
+app.get("/db-test", async (req, res) => {
+	try {
+	  const users = await prisma.user.findMany({ take: 1 });
+	  res.json({ ok: true, users });
+	} catch (e) {
+	  console.error("DB TEST ERROR:", e);
+	  res.status(500).json({ ok: false, error: e.message });
+	}
+  });
+  

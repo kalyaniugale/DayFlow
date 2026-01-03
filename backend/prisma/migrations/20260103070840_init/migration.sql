@@ -12,9 +12,12 @@ CREATE TABLE "User" (
     "id" TEXT NOT NULL,
     "name" TEXT NOT NULL,
     "email" TEXT NOT NULL,
+    "loginId" TEXT NOT NULL,
     "password" TEXT NOT NULL,
     "role" "Role" NOT NULL DEFAULT 'EMPLOYEE',
     "isActive" BOOLEAN NOT NULL DEFAULT true,
+    "passwordChanged" BOOLEAN NOT NULL DEFAULT false,
+    "emailVerified" BOOLEAN NOT NULL DEFAULT false,
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" TIMESTAMP(3) NOT NULL,
 
@@ -29,6 +32,7 @@ CREATE TABLE "Employee" (
     "department" TEXT,
     "designation" TEXT,
     "dateOfJoin" TIMESTAMP(3),
+    "yearOfJoining" INTEGER,
     "managerId" TEXT,
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" TIMESTAMP(3) NOT NULL,
@@ -122,8 +126,22 @@ CREATE TABLE "CompanyLog" (
     CONSTRAINT "CompanyLog_pkey" PRIMARY KEY ("id")
 );
 
+-- CreateTable
+CREATE TABLE "LoginIdSerial" (
+    "id" TEXT NOT NULL,
+    "year" INTEGER NOT NULL,
+    "serial" INTEGER NOT NULL DEFAULT 1,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "LoginIdSerial_pkey" PRIMARY KEY ("id")
+);
+
 -- CreateIndex
 CREATE UNIQUE INDEX "User_email_key" ON "User"("email");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "User_loginId_key" ON "User"("loginId");
 
 -- CreateIndex
 CREATE UNIQUE INDEX "Employee_employeeCode_key" ON "Employee"("employeeCode");
@@ -136,6 +154,9 @@ CREATE UNIQUE INDEX "EmployeeProfile_employeeId_key" ON "EmployeeProfile"("emplo
 
 -- CreateIndex
 CREATE UNIQUE INDEX "Skill_name_key" ON "Skill"("name");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "LoginIdSerial_year_key" ON "LoginIdSerial"("year");
 
 -- AddForeignKey
 ALTER TABLE "Employee" ADD CONSTRAINT "Employee_userId_fkey" FOREIGN KEY ("userId") REFERENCES "User"("id") ON DELETE CASCADE ON UPDATE CASCADE;

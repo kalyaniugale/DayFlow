@@ -1,29 +1,25 @@
 import express from "express";
-import isAuth from "../middlewares/isAuth.js"
-import passport from "passport";
-import { login, logout, signup ,getMe, googleSuccess} from "../controllers/authController.js";
-const authRouter=express.Router();
+import isAuth from "../middlewares/isAuth.js";
+import isAdminOrHR from "../middlewares/isAdminOrHR.js";
+import { 
+  login, 
+  logout, 
+  createEmployee, 
+  getMe, 
+  changePassword
+} from "../controllers/authController.js";
 
-authRouter.post("/signup",signup);
-authRouter.post("/login",login);
-authRouter.post("/logout",logout);
-authRouter.get("/me", isAuth, getMe)
+const authRouter = express.Router();
 
-authRouter.get(
-  "/google",
-  passport.authenticate("google", {
-    scope: ["profile", "email"],
-  })
-);
+// Public routes
+authRouter.post("/login", login);
+authRouter.post("/logout", logout);
 
-authRouter.get(
-  "/google/callback",
-  passport.authenticate("google", {
-    session: false,
-    failureRedirect: `${process.env.CLIENT_URL}/login?error=google_auth_failed`,
-  }),
-  googleSuccess
-);
+// Protected routes
+authRouter.get("/me", isAuth, getMe);
+authRouter.post("/change-password", isAuth, changePassword);
 
+// Admin/HR only routes
+authRouter.post("/create-employee", isAuth, isAdminOrHR, createEmployee);
 
-export default authRouter
+export default authRouter;

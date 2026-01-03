@@ -2,143 +2,202 @@ import prisma from "../config/prisma.js";
 import validator from "validator";
 import bcrypt from "bcryptjs";
 import generateToken from "../config/token.js";
-
-/**
- * Convert frontend role -> Prisma enum
- */
-const prismaRoleFromReq = (role) => {
-  if (role === "Role-1") return "Role_1";
-  if (role === "Role-2") return "Role_2";
-  return null;
-};
+import { generateLoginId, generateRandomPassword } from "../utils/loginIdGenerator.js";
 
 /**
  * Convert Prisma enum -> frontend role
  */
 const apiRoleFromDb = (role) => {
-  if (role === "Role_1") return "Role-1";
-  if (role === "Role_2") return "Role-2";
   return role;
 };
 
 /**
- * SIGNUP
+ * CREATE EMPLOYEE (Admin/HR only)
+ * Creates a new employee with auto-generated login ID and password
  */
-export const signup = async (req, res) => {
+export const createEmployee = async (req, res) => {
   try {
-    const { name, email, password, role } = req.body;
+    const {
+      firstName,
+      lastName,
+      email,
+      role = "EMPLOYEE",
+      department,
+      designation,
+      dateOfJoin,
+      phone,
+      addressLine,
+      city,
+      state,
+      country,
+      pincode,
+    } = req.body;
 
-    if (!name || !email || !password || !role) {
-      return res.status(400).json({ message: "empty fields" });
+    // Validation
+    if (!firstName || !lastName || !email) {
+      return res.status(400).json({ 
+        message: "First name, last name, and email are required" 
+      });
     }
 
     if (!validator.isEmail(email)) {
-      return res.status(400).json({ message: "enter valid email" });
+      return res.status(400).json({ message: "Invalid email format" });
     }
 
-    if (password.length < 8) {
-      return res
-        .status(400)
-        .json({ message: "password must have 8 characters" });
-    }
-
-    const mappedRole = prismaRoleFromReq(role);
-    if (!mappedRole) {
-      return res.status(400).json({ message: "invalid role" });
-    }
-
-    const isUserExist = await prisma.user.findUnique({
+    // Check if email already exists
+    const existingUser = await prisma.user.findUnique({
       where: { email },
     });
 
-    if (isUserExist) {
-      return res.status(400).json({ message: "user already exists" });
+    if (existingUser) {
+      return res.status(400).json({ message: "Email already exists" });
     }
 
-    const hashPassword = await bcrypt.hash(password, 10);
+    // Validate role
+    if (!["ADMIN", "HR", "EMPLOYEE"].includes(role)) {
+      return res.status(400).json({ message: "Invalid role" });
+    }
 
-    const user = await prisma.user.create({
-      data: {
-        name,
-        email,
-        password: hashPassword,
-        role: mappedRole,
-      },
-      select: {
-        id: true,
-        name: true,
-        email: true,
-        role: true,
-        photoUrl: true,
-        description: true,
-        googleId: true,
-        createdAt: true,
-        updatedAt: true,
-      },
+    // Get year of joining from dateOfJoin or use current year
+    const joinDate = dateOfJoin ? new Date(dateOfJoin) : new Date();
+    const yearOfJoining = joinDate.getFullYear();
+
+    // Generate login ID
+    const loginId = await generateLoginId(firstName, lastName, yearOfJoining);
+
+    // Check if loginId already exists (shouldn't happen, but safety check)
+    const existingLoginId = await prisma.user.findUnique({
+      where: { loginId },
     });
 
-    const token = generateToken(user.id);
+    if (existingLoginId) {
+      return res.status(500).json({ 
+        message: "Login ID collision. Please try again." 
+      });
+    }
 
-    res.cookie("token", token, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === "production",
-      sameSite:
-        process.env.NODE_ENV === "production" ? "None" : "Strict",
-      maxAge: 7 * 24 * 60 * 60 * 1000,
+    // Generate random password
+    const autoPassword = generateRandomPassword(12);
+
+    // Hash password
+    const hashPassword = await bcrypt.hash(autoPassword, 10);
+
+    // Create user and employee in a transaction
+    const result = await prisma.$transaction(async (tx) => {
+      // Create user
+      const user = await tx.user.create({
+        data: {
+          name: `${firstName} ${lastName}`,
+          email,
+          loginId,
+          password: hashPassword,
+          role,
+          passwordChanged: false,
+          emailVerified: false,
+        },
+      });
+
+      // Create employee
+      const employee = await tx.employee.create({
+        data: {
+          employeeCode: loginId, // Use loginId as employeeCode
+          userId: user.id,
+          department,
+          designation,
+          dateOfJoin: joinDate,
+          yearOfJoining,
+        },
+      });
+
+      // Create employee profile if personal details provided
+      if (phone || addressLine || city || state || country || pincode) {
+        await tx.employeeProfile.create({
+          data: {
+            employeeId: employee.id,
+            phone,
+            addressLine,
+            city,
+            state,
+            country,
+            pincode,
+          },
+        });
+      }
+
+      return { user, employee, autoPassword };
     });
 
+    // Return user data with auto-generated password (only shown once)
     return res.status(201).json({
-      ...user,
-      role: apiRoleFromDb(user.role),
+      message: "Employee created successfully",
+      user: {
+        id: result.user.id,
+        name: result.user.name,
+        email: result.user.email,
+        loginId: result.user.loginId,
+        role: result.user.role,
+        passwordChanged: result.user.passwordChanged,
+      },
+      temporaryPassword: result.autoPassword, // Include auto-generated password
+      note: "Please share the login ID and temporary password with the employee. They must change it on first login.",
     });
   } catch (error) {
-    console.error(error);
-    return res.status(500).json({ message: "signup error" });
+    console.error("Error creating employee:", error);
+    return res.status(500).json({ message: "Error creating employee" });
   }
 };
 
 /**
  * LOGIN
+ * Supports both loginId and email
  */
 export const login = async (req, res) => {
   try {
-    const { email, password } = req.body;
+    const { loginIdOrEmail, password } = req.body;
 
-    if (!email || !password) {
-      return res.status(400).json({ message: "empty fields" });
+    if (!loginIdOrEmail || !password) {
+      return res.status(400).json({ message: "Login ID/Email and password are required" });
     }
 
-    // 🔴 IMPORTANT: must SELECT password
-    const user = await prisma.user.findUnique({
-      where: { email },
+    // Try to find user by loginId or email
+    const user = await prisma.user.findFirst({
+      where: {
+        OR: [
+          { loginId: loginIdOrEmail },
+          { email: loginIdOrEmail },
+        ],
+      },
       select: {
         id: true,
         name: true,
         email: true,
+        loginId: true,
         password: true,
         role: true,
-        photoUrl: true,
-        description: true,
-        googleId: true,
+        passwordChanged: true,
+        isActive: true,
       },
     });
 
     if (!user) {
-      return res
-        .status(400)
-        .json({ message: "user does not exist , register first !" });
-    }
-
-    if (!user.password) {
-      return res.status(400).json({
-        message: "Use Google login for this account",
+      return res.status(400).json({ 
+        message: "Invalid login ID/Email or password" 
       });
     }
+
+    if (!user.isActive) {
+      return res.status(403).json({ 
+        message: "Account is deactivated. Please contact HR." 
+      });
+    }
+
 
     const isMatch = await bcrypt.compare(password, user.password);
 
     if (!isMatch) {
-      return res.status(400).json({ message: "something went wrong" });
+      return res.status(400).json({ 
+        message: "Invalid login ID/Email or password" 
+      });
     }
 
     const token = generateToken(user.id);
@@ -153,39 +212,14 @@ export const login = async (req, res) => {
 
     const { password: _, ...safeUser } = user;
 
-    return res.status(201).json({
+    return res.status(200).json({
       ...safeUser,
       role: apiRoleFromDb(user.role),
+      requiresPasswordChange: !user.passwordChanged, // Flag if password needs to be changed
     });
   } catch (error) {
-    console.error(error);
-    return res.status(500).json({ message: "login error" });
-  }
-};
-
-/**
- * GOOGLE SUCCESS
- */
-export const googleSuccess = async (req, res) => {
-  try {
-    const user = req.user;
-
-    const token = generateToken(user.id);
-
-    res.cookie("token", token, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === "production",
-      sameSite:
-        process.env.NODE_ENV === "production" ? "None" : "Strict",
-      maxAge: 7 * 24 * 60 * 60 * 1000,
-    });
-
-    return res.redirect(
-      process.env.CLIENT_URL || "http://localhost:5173"
-    );
-  } catch (error) {
-    console.error(error);
-    return res.redirect("/login");
+    console.error("Login error:", error);
+    return res.status(500).json({ message: "Login error" });
   }
 };
 
@@ -203,6 +237,69 @@ export const logout = async (req, res) => {
 };
 
 /**
+ * CHANGE PASSWORD
+ * Allows users to change their auto-generated password
+ */
+export const changePassword = async (req, res) => {
+  try {
+    const { currentPassword, newPassword } = req.body;
+
+    if (!currentPassword || !newPassword) {
+      return res.status(400).json({ 
+        message: "Current password and new password are required" 
+      });
+    }
+
+    if (newPassword.length < 8) {
+      return res.status(400).json({ 
+        message: "New password must be at least 8 characters long" 
+      });
+    }
+
+    // Get user with password
+    const user = await prisma.user.findUnique({
+      where: { id: req.userId },
+      select: {
+        id: true,
+        password: true,
+      },
+    });
+
+    if (!user) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    // Verify current password
+    const isMatch = await bcrypt.compare(currentPassword, user.password);
+
+    if (!isMatch) {
+      return res.status(400).json({ 
+        message: "Current password is incorrect" 
+      });
+    }
+
+    // Hash new password
+    const hashPassword = await bcrypt.hash(newPassword, 10);
+
+    // Update password and mark as changed
+    await prisma.user.update({
+      where: { id: req.userId },
+      data: {
+        password: hashPassword,
+        passwordChanged: true,
+      },
+    });
+
+    return res.status(200).json({ 
+      message: "Password changed successfully" 
+    });
+  } catch (error) {
+    console.error("Change password error:", error);
+    return res.status(500).json({ message: "Error changing password" });
+  }
+};
+
+/**
  * GET ME
  */
 export const getMe = async (req, res) => {
@@ -210,9 +307,14 @@ export const getMe = async (req, res) => {
     const user = await prisma.user.findUnique({
       where: { id: req.userId },
       select: {
+        id: true,
         name: true,
         email: true,
+        loginId: true,
         role: true,
+        passwordChanged: true,
+        emailVerified: true,
+        isActive: true,
       },
     });
 
